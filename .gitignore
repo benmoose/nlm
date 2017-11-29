@@ -285,11 +285,13 @@ __pycache__/
 
 # C extensions
 *.so
+*.c
 
 # Distribution / packaging
 .Python
 env/
 build/
+img/out/
 develop-eggs/
 dist/
 downloads/

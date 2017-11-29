@@ -105,14 +105,14 @@ cdef class NLM(ImageModel):
             image_name = input('Enter the image name (default: {}).\n'
                                ' -> img/in/'.format(default_image))
             if not image_name:
-                print('Using default image: woman.jpeg')
+                print('Using default image: {}'.format(default_image))
             patch_radius = int(input('Enter the patch radius.\n -> '))
             window_radius = int(input('Enter the window radius.\n -> '))
             sigma = int(input('Enter the sigma value.\n -> '))
             _ = is_int(patch_radius, window_radius, sigma)
             _ = is_gt(patch_radius, window_radius, sigma, threshold=0)
             return NLM(
-                'img/in/{}'.format(image_name or 'woman.jpeg'),
+                'img/in/{}'.format(image_name or default_image),
                 sigma=sigma,
                 patch_radius=patch_radius,
                 window_radius=window_radius,)
@@ -167,8 +167,8 @@ cdef class NLM(ImageModel):
         # Start at 1 to stay in array bounds.
         cdef int x1, x2
         cdef float d
-        for x1 in range(max(1, -t_row), min(num_rows, num_rows - t_row)):
-            for x2 in range(max(1, -t_col), min(num_cols, num_cols - t_col)):
+        for x1 in range(int_max(1, -t_row), min(num_rows, num_rows - t_row)):
+            for x2 in range(int_max(1, -t_col), min(num_cols, num_cols - t_col)):
                 # Compute diff squared
                 d = (padded_im[x1, x2] - padded_im[x1 + t_row, x2 + t_col]) ** 2
                 integral[x1, x2] = d \
@@ -219,11 +219,11 @@ cdef class NLM(ImageModel):
                 NLM.integral_image(
                     padded_im, integral_diff, t_row, t_col, num_rows, num_cols)
                 # Iterate over every patch, accounting for shift.
-                for x1 in range(max(self.ds, self.ds - t_row),
-                                min(num_rows - self.ds,
+                for x1 in range(int_max(self.ds, self.ds - t_row),
+                                int_min(num_rows - self.ds,
                                     num_rows - self.ds - t_row)):
-                    for x2 in range(max(self.ds, self.ds - t_col),
-                                    min(num_cols - self.ds,
+                    for x2 in range(int_max(self.ds, self.ds - t_col),
+                                    int_min(num_cols - self.ds,
                                         num_cols - self.ds - t_col)):
                         # Get the squared difference for patch at (t_row, t_col)
                         # and patch at (x1, x2) using integral image. This is
