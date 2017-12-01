@@ -1,19 +1,35 @@
+"""
+NLM Algorithm for Image Processing Coursework.
+Code by Ben Hadfield.
+
+Algorithm implemented from IPOL paper:
+http://www.ipol.im/pub/art/2011/bcm_nlm/article.pdf
+
+Python -> Cython conversion (for speed up) informed by a variety of sources,
+including:
+ - http://docs.cython.org/en/latest/
+ - http://cython.readthedocs.io/en/latest/src/userguide/extension_types.html
+ - https://github.com/scipy/scipy
+"""
+
 import uuid
 import numpy as np
+from termcolor import cprint
 cimport numpy as np
 from PIL import Image
 from libc.math cimport exp
 
 
-# The Python min and max functions works on Python objects, and so are
-# very slow.
+# The Python min and max functions works on Python objects, and so for int
+# checks we can get a speed up by creating our own functions.
 cdef inline int int_max(int a, int b): return a if a >= b else b
 cdef inline int int_min(int a, int b): return a if a <= b else b
 
-# Define custom image type
-ctypedef np.float32_t IMGDTYPE
+# Define custom image type.
+ctypedef np.float32_t NLMIMGTYPE
 
 
+# Validation checks (for user input).
 def _throw_or_return(bint result, bint throw, error=ValueError):
     """
     Takes `result` and `throw`, and returns `True` if result is `True`, else
@@ -42,6 +58,7 @@ def is_int(*args, bint throw=True):
     return _throw_or_return(result, throw)
 
 
+# Base image class.
 cdef class ImageModel:
     """
     Base class for image models.
@@ -96,6 +113,7 @@ cdef class ImageModel:
         return uid
 
 
+# NLM implementation.
 cdef class NLM(ImageModel):
     @staticmethod
     def setup():
@@ -105,7 +123,7 @@ cdef class NLM(ImageModel):
             image_name = input('Enter the image name (default: {}).\n'
                                ' -> img/in/'.format(default_image))
             if not image_name:
-                print('Using default image: {}'.format(default_image))
+                cprint('Using default image: {}'.format(default_image), 'yellow')
             patch_radius = int(input('Enter the patch radius.\n -> '))
             window_radius = int(input('Enter the window radius.\n -> '))
             sigma = int(input('Enter the sigma value.\n -> '))
@@ -141,7 +159,7 @@ cdef class NLM(ImageModel):
         self.Ds = window_radius
         # Max difference between two pixels for target patch to be included in
         # the average
-        self.distance_threshold = 400
+        self.distance_threshold = 300
         # Hyperparams
         self.h = .1
         self.sigma = sigma
@@ -153,8 +171,8 @@ cdef class NLM(ImageModel):
 
     @staticmethod
     cdef integral_image(
-            IMGDTYPE [:, :] padded_im,
-            IMGDTYPE [:, ::] integral,
+            NLMIMGTYPE [:, :] padded_im,
+            NLMIMGTYPE [:, ::] integral,
             int t_row,
             int t_col,
             int num_rows,
@@ -178,7 +196,7 @@ cdef class NLM(ImageModel):
 
     @staticmethod
     cdef dist_from_integral_image(
-        IMGDTYPE[:, ::] integral, int row, int col, int ds):
+        NLMIMGTYPE[:, ::] integral, int row, int col, int ds):
         """
         Gets the ssd of the patch centred at (row, col) in constant time using
         the given integral image.
@@ -201,11 +219,11 @@ cdef class NLM(ImageModel):
         # Padding width on each side of the image `ds + Ds`.
         pad_size = self.ds + self.Ds + 1
         # Set up arrays.
-        cdef IMGDTYPE [:, :] padded_im = np.ascontiguousarray(
+        cdef NLMIMGTYPE [:, :] padded_im = np.ascontiguousarray(
             NLM.pad_image(self.pixels, pad_size)).astype(np.float32)
-        cdef IMGDTYPE [:, :] output = np.zeros_like(padded_im)
-        cdef IMGDTYPE [:, ::1] weights = np.zeros_like(padded_im, dtype=np.float32, order='C')
-        cdef IMGDTYPE[:, ::1] integral_diff = np.zeros_like(padded_im, order='C')
+        cdef NLMIMGTYPE [:, :] output = np.zeros_like(padded_im)
+        cdef NLMIMGTYPE [:, ::1] weights = np.zeros_like(padded_im, dtype=np.float32, order='C')
+        cdef NLMIMGTYPE[:, ::1] integral_diff = np.zeros_like(padded_im, order='C')
         # Number of rows and cols in the padded image.
         num_rows, num_cols = padded_im.shape[0], padded_im.shape[1]
 
