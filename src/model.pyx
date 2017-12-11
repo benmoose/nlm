@@ -123,7 +123,8 @@ cdef class NLM(ImageModel):
             image_name = input('Enter the image name (default: {}).\n'
                                ' -> img/in/'.format(default_image))
             if not image_name:
-                cprint('Using default image: {}'.format(default_image), 'yellow')
+                cprint('Using default image: {}'
+                       .format(default_image), 'yellow')
             patch_radius = int(input('Enter the patch radius.\n -> '))
             window_radius = int(input('Enter the window radius.\n -> '))
             sigma = int(input('Enter the sigma value.\n -> '))
@@ -153,15 +154,20 @@ cdef class NLM(ImageModel):
         # Notation borrowed from IPOL article
         # Parameter-Free Fast Pixelwise Non-Local Means Denoising, pg. 304.
         # http://www.ipol.im/pub/art/2014/120/article_lr.pdf
+        # Patch radius is the size of each patch.
         self.d = 2 * patch_radius + 1
         self.ds = patch_radius
+        # Window radius is the search area about each pixel where patches are
+        # searched.
         self.D = 2 * window_radius + 1
         self.Ds = window_radius
         # Max difference between two pixels for target patch to be included in
         # the average
         self.distance_threshold = 300
-        # Hyperparams
+        # HYPERPARAMS
+        # `h` is a parameter we set to fine tune how similar patches must be.
         self.h = .1
+        # `sigma` defines how similar patches must be to be counted in the avg.
         self.sigma = sigma
 
     @staticmethod
@@ -185,8 +191,10 @@ cdef class NLM(ImageModel):
         # Start at 1 to stay in array bounds.
         cdef int x1, x2
         cdef float d
-        for x1 in range(int_max(1, -t_row), min(num_rows, num_rows - t_row)):
-            for x2 in range(int_max(1, -t_col), min(num_cols, num_cols - t_col)):
+        for x1 in range(int_max(1, -t_row),
+                        int_min(num_rows, num_rows - t_row)):
+            for x2 in range(int_max(1, -t_col),
+                            int_min(num_cols, num_cols - t_col)):
                 # Compute diff squared
                 d = (padded_im[x1, x2] - padded_im[x1 + t_row, x2 + t_col]) ** 2
                 integral[x1, x2] = d \
@@ -213,37 +221,40 @@ cdef class NLM(ImageModel):
         return d / (2 * ds + 1) ** 2
 
     def run(self, *args, **kwargs):
-        # INITIALISATION.
-        cdef int num_rows, num_cols, pad_size, t_row, t_col, x1, x2, row, col
-        cdef float alpha, d2, weight
+        # 1. INITIALISATION.
+        # Set up C vars for algorithm.
+        cdef int num_rows, num_cols, pad_size, shift_row, shift_col, x1, x2, row, col
+        cdef float double_coefficient, d2, weight
         # Padding width on each side of the image `ds + Ds`.
-        pad_size = self.ds + self.Ds + 1
+        pad_size = self.ds + self.Ds
         # Set up arrays.
         cdef NLMIMGTYPE [:, :] padded_im = np.ascontiguousarray(
             NLM.pad_image(self.pixels, pad_size)).astype(np.float32)
         cdef NLMIMGTYPE [:, :] output = np.zeros_like(padded_im)
-        cdef NLMIMGTYPE [:, ::1] weights = np.zeros_like(padded_im, dtype=np.float32, order='C')
-        cdef NLMIMGTYPE[:, ::1] integral_diff = np.zeros_like(padded_im, order='C')
+        cdef NLMIMGTYPE [:, ::] weights = np.zeros_like(
+            padded_im, dtype=np.float32, order='C')
+        cdef NLMIMGTYPE[:, ::] integral_diff = np.zeros_like(
+            padded_im, order='C')
         # Number of rows and cols in the padded image.
         num_rows, num_cols = padded_im.shape[0], padded_im.shape[1]
 
-        # MAIN LOOP.
-        # Iterate over every pixel in the search window.
-        for t_row in range(-self.Ds, self.Ds + 1):
-            print('{}/{}'.format(t_row + self.Ds, self.Ds + self.Ds))
-            for t_col in range(0, self.Ds + 1):
-                alpha = .5 if t_row != 0 and t_col == 0 else 1
+        # 2. MAIN LOOP.
+        # `shift_row` and `shift_col` are shifts through window area.
+        for shift_row in range(-self.Ds, self.Ds + 1):
+            print('{}/{}'.format(shift_row + self.Ds, self.Ds + self.Ds))
+            for shift_col in range(0, self.Ds + 1):
+                double_coefficient = .5 if shift_row != 0 and shift_col == 0 else 1
                 integral_diff = np.zeros_like(padded_im, order='C')
                 NLM.integral_image(
-                    padded_im, integral_diff, t_row, t_col, num_rows, num_cols)
+                    padded_im, integral_diff, shift_row, shift_col, num_rows, num_cols)
                 # Iterate over every patch, accounting for shift.
-                for x1 in range(int_max(self.ds, self.ds - t_row),
+                for x1 in range(int_max(self.ds, self.ds - shift_row),
                                 int_min(num_rows - self.ds,
-                                    num_rows - self.ds - t_row)):
-                    for x2 in range(int_max(self.ds, self.ds - t_col),
+                                    num_rows - self.ds - shift_row)):
+                    for x2 in range(int_max(self.ds, self.ds - shift_col),
                                     int_min(num_cols - self.ds,
-                                        num_cols - self.ds - t_col)):
-                        # Get the squared difference for patch at (t_row, t_col)
+                                        num_cols - self.ds - shift_col)):
+                        # Get the squared difference for patch at (shift_row, shift_col)
                         # and patch at (x1, x2) using integral image. This is
                         # the measure of patch similarity.
                         d2 = NLM.dist_from_integral_image(
@@ -253,25 +264,32 @@ cdef class NLM(ImageModel):
                         # threshold).
                         if d2 > self.distance_threshold:
                             continue
-                        weight = alpha * exp(
+                        weight = double_coefficient * exp(
                             -(max(d2 - (2 * self.sigma ** 2), 0))
                             / self.h ** 2)
-                        # Store sum of weights for later normalisation.
+                        # Add result to weight and result, exploiting the
+                        # symmetry of the weight matrix (distance from ref patch
+                        # and target patch are the same both ways).
+                        # First, store sum of weights for later normalisation.
                         weights[x1, x2] += weight
-                        weights[x1 + t_row, x2 + t_col] += weight
-                        # Add the weighted pixel to the result.
+                        weights[x1 + shift_row, x2 + shift_col] += weight
+                        # Add the weighted pixel to the result. Normalised in
+                        # the next step.
                         output[x1, x2] += weight * \
-                            padded_im[x1 + t_row, x2 + t_col]
-                        output[x1 + t_row, x2 + t_col] += weight * \
+                            padded_im[x1 + shift_row, x2 + shift_col]
+                        output[x1 + shift_row, x2 + shift_col] += weight * \
                             padded_im[x1, x2]
 
-        # COMPUTE FINAL NORMALISED ESTIMATE
+        # 3. COMPUTE FINAL NORMALISED ESTIMATE
+        # Iterate over each pixel and divide by the sum of weights computed in
+        # the main loop.
         for row in range(self.ds, num_rows - self.ds):
             for col in range(self.ds, num_cols - self.ds):
                 output[row, col] /= weights[row, col]
-
+        # Trim padding.
         cdef np.ndarray normalised_output = np.array(
             output[pad_size:-pad_size, pad_size:-pad_size], dtype=np.uint8)
+        # Save the image to img/out/
         cdef str im_id = self.save(Image.fromarray(normalised_output))
 
         print('Done! Image ID {}'.format(im_id))
